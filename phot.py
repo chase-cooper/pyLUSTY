@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.interpolate import LinearNDInterpolator
-import os,requests,shutil,subprocess,sys,time
+import requests,sys
 from utils import *
 
 ### Catalogs
@@ -21,7 +20,6 @@ sfd     = SFDQuery()
 
 ### MCMC Fitting
 import corner,emcee
-from multiprocessing import Pool
 
 # Constants
 c           = 3e8           # [m/s]

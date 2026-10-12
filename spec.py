@@ -1,10 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
-import os,subprocess,time,sys
+import sys
 
 ### MCMC
 import corner,emcee
-# from multiprocessing import Pool
 
 ### Other
 from utils import *

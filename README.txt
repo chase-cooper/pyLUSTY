@@ -30,9 +30,12 @@ To use:
 
 Necessary packages:
     - for running TLUSTY/SYNSPEC: only base Python modules
-    - phot.py:  astroquery, dustmaps, corner, emcee, matplotlib, numpy, scipy, requests
+    - phot.py:  astroquery, dustmaps, corner, emcee, matplotlib, numpy, scipy,
+        requests
     - spec.py:  matplotlib, numpy, scipy
     - utils.py: astropy, matplotlib, numpy, scipy
+
+################################################################################
 
 Directory:
 
