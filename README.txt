@@ -1,6 +1,13 @@
 This is a simple Python wrapper I wrote to facilitate the use of TLUSTY for 
 producing models of DA(Z) white dwarf atmospheres and synthetic spectra, and 
-for fitting photometry/spectroscopy with models.
+for fitting photometry/spectroscopy with models. There are 4 main programs:
+
+    - tlusty.py:    produce photospheric models and synthetic spectra
+    - phot.py:      retrieve an object's photometry and fit it using pure-
+                        hydrogen spectra
+    - spec.py:      fit a user-supplied FITS file containing a spectrum using
+                        pure-hydrogen spectra
+    - linefit.py:   fit spectral lines for elemental abundances.
 
 To use:
 
@@ -28,8 +35,11 @@ To use:
         -   't_eff' is the effective temperature of the white dwarf in Kelvin.
         -   'log_g' is the surface gravity of the white dwarf in cgs units
 
-Necessary packages:
-    - for running TLUSTY/SYNSPEC: only base Python modules
+Necessary packages: astropy, astroquery, corner, dustmaps, emcee, matplotlib,
+numpy, requests, scipy
+
+    - for running TLUSTY/SYNSPEC: only base Python libraries
+    - linefit.py: matplotlib, numpy, scipy
     - phot.py:  astroquery, dustmaps, corner, emcee, matplotlib, numpy, scipy,
         requests
     - spec.py:  matplotlib, numpy, scipy
@@ -40,8 +50,8 @@ Necessary packages:
 Directory:
 
 pyLUSTY
-    ├─ AAREADME.txt
-    ├─ data.zip
+    ├─ README.txt (you are here)
+    ├─ data
     │   ├─ dustmaps
     │   │   ├─ sfd
     │   │       ├─ SFD_dust_4096_ngp.fits
@@ -59,8 +69,7 @@ pyLUSTY
     │   │   ├─ skymapper
     │   │       ├─ u.dat, g.dat, r.dat, i.dat, z.dat
     │   │
-    │   ├─ fits_files
-    │   │   ├─ (empty)
+    │   ├─ fits_files (empty)
     │   │
     │   ├─ galex.dat
     │   ├─ hydrogengrid
@@ -70,15 +79,12 @@ pyLUSTY
     │       ├─ seq_020_thin.txt, ..., seq_130_thick.txt
     │
     ├─ hydrogengrid.zip
-    ├─ outputs
-    │    ├─ (empty)
-    │
+    ├─ linefit.py
+    ├─ outputs (empty)
     ├─ phot.py
     ├─ spec.py
     ├─ tlusty
-    │   ├─ scenarios
-    │   │     ├─ (empty)
-    │   │
+    │   ├─ scenarios (empty)
     │   ├─ cwd.flag
     │
     ├─ tlusty.py
