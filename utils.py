@@ -8,15 +8,20 @@ import os,urllib.request,time
 
 ###########################################################################################
 
+################################
+### IMPORTANT FILE LOCATIONS ###
+################################
+
+
 # Top-level directory
-HOME    = "/Users/cooper/Documents/Research/pyLUSTY/"    
+HOME    = "/Users/cooper/Documents/Research/pyLUSTY/"  
+
+# Directory containing ALL TLUSTY-related files
+PATH    = HOME+"tlusty/"    
 
 # Paths to TLUSTY and SYNSPEC executables
 TLEXE   = HOME+'tlusty/tlusty302/tlusty302.exe'
 SYNEXE  = HOME+'tlusty/synspec51/synspec51.exe'
-
-# Directory containing ALL TLUSTY-related files
-PATH    = HOME+"tlusty/"    
 
 # Scenario directory, where all output files will go
 SCEN    = PATH+'scenarios'
@@ -28,19 +33,32 @@ FLAG    = PATH+'cwd.flag'
 
 ### For TLUSTY/SYNSPEC operation:
 
+elements = {
+    1:  'h',
+    2:  'he',
+    6:  'c',
+    7:  'n',
+    8:  'o',
+    11: 'na',
+    12: 'mg',
+    13: 'al',
+    14: 'si',
+    15: 'p',
+    16: 's',
+    20: 'ca',
+    26: 'fe'
+}
+
 def ZtoElement(Z):
-    elements = {
-        1:  'H',
-        2:  'He',
-        6:  'C',
-        7:  'N',
-        8:  'O',
-        13: 'Al',
-        14: 'Si',
-        15: 'P',
-        16: 'S'
-    }
     return elements[Z]
+
+def ElementtoZ(elem):
+    elem = elem.lower()
+    try:
+        res = list(elements.keys())[list(elements.values()).index(elem)]
+    except ValueError:
+        res = -1
+    return res
 
 def newSpeciesDict():
     """
@@ -261,7 +279,7 @@ def fetch_files(det, grating, lpPos, cenwave, disptab):
 
     Borrowed from HST Notebook on LSF convolution
     """
-    datadir = 'hstdata'
+    datadir = 'data/hstdata'
 
     # Link to where all the files live
     COS_site_rootname = (
@@ -524,8 +542,8 @@ def convolve_lsf(wavelength, spec, cenwave, lsf_file, disptab, detector="FUV"):
                                         detector=detector)
 
     # Sets up new wavelength scale used in the convolution
-    nstep = round((max(wavelength) - min(wavelength)) / step) - 1
-    wave_cos = min(wavelength) + np.arange(nstep) * step
+    nstep = round((np.max(wavelength) - np.min(wavelength)) / step) - 1
+    wave_cos = np.min(wavelength) + np.arange(nstep) * step
 
     # Resampling onto the input spectrum's wavelength scale:
     # Builds up interpolated function from input spectrum
@@ -592,16 +610,18 @@ def loadConvolutionFiles(fname):
     """
     params  = lsfParams(fname)
     lsf_file,disp_file  = fetch_files(*params.values())
-    lsf_file = 'hstdata/'+lsf_file
+    lsf_file = 'data/hstdata/'+lsf_file
     return params,lsf_file,disp_file
 
-def convolveModelWithCOS(wvln,flux,fname,files=None):
+def convolveModelWithCOS(wvln,flux,fname='',files=None):
     """
     A function that simply puts all the previous steps together. Returns the
     convolved model spectrum
     """
 
     if files is None:
+        if fname=='':
+            print("No filename or convolution files were provided. Exiting...")
         files = loadConvolutionFiles(fname)
     params,lsf_file,disp_file = files
 

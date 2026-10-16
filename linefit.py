@@ -9,7 +9,6 @@ from utils import *
 ### Produce a spectrum over a range [linecenter-width-2,linecenter+width+2] using the input files
 ###     of scenario 'scen_name' and varying the species [sp] to have abundances [abn]
 
-# Good
 def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0,ddex=0.5):
     """
     Produce a spectrum over a wavelength range of [linecenter-width-2,linecenter+width+2],
@@ -63,7 +62,6 @@ def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0,ddex=0.5):
     # Return to pwd directory
     os.chdir(HOME)
 
-# Good
 def preload_spectra(scen_name,sp,lower,upper,ddex=0.1):
     """
     Load a range of spectra, with each spectrum specified the abundance of a given element 'sp'.
@@ -87,7 +85,6 @@ def preload_spectra(scen_name,sp,lower,upper,ddex=0.1):
         spec_dict[abnstr]   = [np.float64(wvln),np.float64(flux)]
     return spec_dict
 
-# Good (?)
 def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.):
     """
     Given a set of parameters and a set of spectra, produce a normalizedsynthetic spectrum. The 
@@ -163,7 +160,6 @@ def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.)
 
     return np.float64(wvln_norm),np.float64(flux_final)
 
-
 def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
             do_ism=False,ism_center=0.,known_lines=[],):
     """
@@ -198,18 +194,6 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
     sigma_obs/= flux_obs
     flux_obs /= norm_obs
 
-    # fig,ax = plt.subplots()
-    # ax.plot(wvln_obs,flux_obs)
-
-    # ### Mask known ISM lines
-    # for line in known_lines:
-    #     ism_center,ism_width,ism_amp = line
-    #     line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
-    #     wvln_obs /= line_mask
-
-    # ax.plot(wvln_obs,flux_obs)
-    # plt.show()
-
     ### Run least squares
 
     # Define parameter bounds and initial guess
@@ -228,7 +212,6 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
 
     # Define residuals function
     def residuals(params):
-        print(params)
         # Load in and normalize synthetic spectrum
         wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
         flux_model = np.interp(wvln_obs,wvln_model,flux_model)
@@ -237,12 +220,39 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
         return flux_model - flux_obs
 
     # Run it
-    result  = least_squares(residuals,p0,method='trf',xtol=1e-8,bounds=bounds)
+    result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
     popt    = result.x
 
+    ### Probability distribution function
+    other_params    = popt[1:]
+    abn_range       = np.arange(lower,upper,0.01)
+    probs           = np.zeros_like(abn_range)
+    for i,abn in enumerate(abn_range):
+        params = [abn]
+        for p in other_params: params.append(p)
+        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
+        score = chi2(flux_obs,flux_model,sigma_obs)
+        probs[i] = np.exp(-0.5*score)
+
+    pdf_norm    = probs/sum(probs)
+    cdf         = np.zeros_like(pdf_norm)
+    for i in range(len(cdf)-1):
+        cdf[i] = sum(pdf_norm[:i+1])/sum(pdf_norm)
+    cdf[-1] = 1
+
+    # Limits from CDF
+    most_prob       = abn_range[np.argmax(pdf_norm)]
+    lower_3sigma    = np.interp(0.01,cdf,abn_range)
+    upper_3sigma    = np.interp(0.99,cdf,abn_range)
+
     ### Plot results
-    fig,ax = plt.subplots()
-    wvln_model,flux_model = forward_model(popt,linecenter,width,spec_dict,conv_stuff)
+    fig,ax = plt.subplots(ncols=2)
+
+    ### Best-fit model
+    params = [most_prob]
+    for p in other_params: params.append(p)
+    wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
+    score = chi2(flux_obs,flux_model,sigma_obs)
 
     # If applicable, add best-fitting ISM line
     if do_ism:
@@ -251,36 +261,104 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
         flux_model  *= line_mask
         ax.plot(wvln_model,line_mask,c='red',linestyle='dashed',zorder=100)
 
-    ax.plot(wvln_model,flux_model,c='red',zorder=100)
-    ax.plot(wvln_obs,flux_obs,c='black')
+    ax[0].plot(wvln_model,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
+    ax[0].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
+    ax[0].set_xlabel(r"Wavelength [$\AA$]",size='large')
+    ax[0].set_ylabel("Normalized flux",size='large')
+    ax[0].set(xlim=(np.min(wvln_model),np.max(wvln_model)),
+              ylim=(0,1.5))
+    ax[0].legend()
+
+    ax[1].plot(abn_range,pdf_norm,c='black')
+    ax[1].set_xlabel("Abundance",size='large')
+    ax[1].set_ylabel("Relative probability",size='large')
+    ax[1].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
+                 label="Best fit: "+np.format_float_positional(most_prob,precision=2))
+    ax[1].vlines(lower_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+                 label=r"$3\sigma$ lower limit: "+np.format_float_positional(lower_3sigma,precision=2))
+    ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+                 label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
+    ax[1].set_xlim(
+        most_prob + (upper_3sigma - most_prob)*2.5,
+        most_prob + (lower_3sigma - most_prob)*2.5
+    )
+    ax[1].invert_xaxis()
+    ax[1].set_ylim(0,max(pdf_norm)*1.1)
+    ax[1].legend()
+
+    fig.set_figwidth(11)
+    plt.tight_layout()
+    plt.savefig(f'outputs/linefit_elem{sp}_{linecenter}AA.png',dpi=250)
+    # plt.legend()
     plt.show()
 
 if __name__=='__main__':
-    pass
+    # Because this function needs a fair but of info to run, the user is prompted for each
+    # parameter.
 
-# newModelSpectra('test_linelist_kurucz',4481,5,12,-10,-4,0.1)
-# newModelSpectra('test_linelist_kurucz',1335,3,6,-10,-4,0.1)
+    fname_spec  = input("Please provide the path to the FITS spectrum to be fit:\t")
 
-res = preload_spectra('test_linelist_kurucz',6,-10,-4,0.1)
-# p0  = [-5.61,35,4479,0.02,0.4]
-# forward_model(p0,4481,4,res,0.1)
-fname_spec = 'fits files/gd56_cos_fuv.fits'
-conv_stuff = loadConvolutionFiles(fname_spec)
-# fname_spec = 'fits files/sample_balmer/Gaia3296_xsh_nuv.fits'
-# conv_stuff = 0
-lineFit(
-    fname_spec=fname_spec,
-    linecenter=1335,
-    width=5,
-    scen='test_linelist_kurucz',
-    sp=6,
-    lower=-10,
-    upper=-4,
-    conv_stuff=conv_stuff,
-    do_ism=True,
-    ism_center=1334.54,
-    known_lines=[]
-)
+    scen        = input("Please provide the name of the scenario to use as a base:\t")
+
+    linecenter  = input("Please provide the central wavelength of the line/region to be fit:\t")
+    linecenter  = float(linecenter)
+
+    width       = input("Please provide the width of the region to be fit, in Angstroms (default: 5AA):\t")
+    width       = float(width)
+
+    sp_str      = input("Please provide the symbol or number of the element whose abundance you are\nfitting for:\t")
+    try:
+        sp = int(sp_str)
+    except:
+        sp = ElementtoZ(sp_str)
+        if sp==-1:
+            print("Element not supported: "+sp_str)
+            exit()
+
+    lower       = input("Please provide the lower limit on the abundance of that species (log(Z/H);\ndefault: -10):\t")
+    if lower=='': lower = -10
+    else:
+        lower       = np.around(float(lower),2)
+
+    upper       = input("Please provide the upper limit on the abundance of that species (log(Z/H);\ndefault: -4):\t")
+    if upper=='': upper = -4
+    else:
+        upper       = np.around(float(upper),2)
+
+    do_ism      = input("Is there an ISM line in the region you're fitting? [y/n]\t").lower()
+    if do_ism=='y':
+        do_ism      = True
+        ism_center  = input("Provide the central wavelength of the ISM feature:\t")
+        ism_center  = float(ism_center)
+    else:
+        do_ism      = False
+        ism_center  = 0.
+
+    print("Generating range of spectra...")
+    newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
+    spectra = preload_spectra(scen,sp,lower,upper,0.1)
+
+    print("Checking spectrum file...")
+    instr   = fits.getheader(fname_spec)['INSTRUME']
+    if instr=='COS':
+        conv_stuff = loadConvolutionFiles(fname_spec)
+    else:
+        conv_stuff = 1
+
+    print("Fitting...")
+    lineFit(
+        fname_spec=fname_spec,
+        linecenter=linecenter,
+        width=width,
+        scen=scen,
+        sp=sp,
+        lower=lower,
+        upper=upper,
+        conv_stuff=conv_stuff,
+        do_ism=do_ism,
+        ism_center=ism_center,
+        known_lines=[]
+    )
 
 
 
