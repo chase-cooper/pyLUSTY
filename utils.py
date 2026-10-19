@@ -747,9 +747,10 @@ def chi2(y,ymodel,yerr):
     """
 
     # Remove points where there's no uncertainty value
-    y       = y[yerr > 0]
-    ymodel  = ymodel[yerr > 0]
-    yerr    = yerr[yerr > 0]
+    yrange  = np.where(yerr > 0)
+    y       = y[yrange]
+    ymodel  = ymodel[yrange]
+    yerr    = yerr[yrange]
 
     # Return chi^2 value
     res = np.sum(np.nan_to_num((y-ymodel)**2/yerr**2,nan=0))

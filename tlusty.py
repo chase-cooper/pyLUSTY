@@ -47,14 +47,17 @@ def pureHmodel(scen:str,teff:float,log_g:float):
     model_broke = False
     for i in range(ntries):
         try:
-            os.system(f"{TLEXE} < fort.5 > lte.6")
-            out6    = open(PATH+f'scenarios/{scen}/lte/lte.6','r').read()
+            os.system(f"{TLEXE} < fort.5 > log.dat")
+            # subprocess.Popen([TLEXE,'<','fort.5','>','lte.6'],shell=True,stdout=subprocess.PIPE,text=True).wait()
+
+            out6    = open(PATH+f'scenarios/{scen}/lte/log.dat','r').read()
             out7    = open(PATH+f'scenarios/{scen}/lte/fort.7','r').read()
             if ('FINAL MODEL ATMOSPHERE' not in out6):
                 print(f"Attempt {i+1}: Model did not finish.")
                 model_broke = True
             elif ('NaN' in out7):
                 print(f"Attempt {i+1}: NaNs in output structure.")
+                model_broke = True
             else:
                 model_broke = False
                 break
@@ -62,16 +65,18 @@ def pureHmodel(scen:str,teff:float,log_g:float):
             print(f"Attempt {i+1}:   Model run has encountered an error.")
             model_broke = True
 
-    os.chdir(HOME)
+    # Rename output files
+    subprocess.run(['cp','fort.7','structure.dat'])
+    subprocess.run(['rm','-f','fort.7'])
+
     if model_broke:
-        log = open('log.dat','a')
-        log.write(scen+'\tLTE'+'\n')
-        log.close()
-        run_finished    = False
+        print("Model did not successfully converge. Check 'log.dat' and 'structure.dat' for details.")
+        run_finished = False
     else:
         print("LTE model completed!")
         run_finished    = True
-    
+
+    os.chdir(HOME)
     return run_finished
     
 def metals(scen:str,teff:float,log_g:float,spdict:dict,is_lte:bool=True):
@@ -106,18 +111,15 @@ def metals(scen:str,teff:float,log_g:float,spdict:dict,is_lte:bool=True):
                is_lte=is_lte,
                is_ltgray=False)         # LTGRAY=False means a base atmosphere file is needed
 
-    # Executable path
-    tlexe = TLEXE
-
     # Copy output from pure-H model
-    subprocess.run(['cp','../lte/fort.7','fort.8'])
+    subprocess.run(['cp','../lte/structure.dat','fort.8'])
 
     ntries=10
     model_broke = False
     for i in range(ntries):
         try:
-            os.system(f"{TLEXE} < fort.5 > metals.6")
-            out7    = open(PATH+f'scenarios/{scen}/metals/metals.6','r').read()
+            os.system(f"{TLEXE} < fort.5 > log_metals.dat")
+            out7    = open(PATH+f'scenarios/{scen}/metals/log_metals.dat','r').read()
             if ('FINAL MODEL ATMOSPHERE' not in out7) or ('NaN' in out7):
                 print(f"Attempt {i+1}:  NaN's in output.")
                 model_broke = True
@@ -128,13 +130,19 @@ def metals(scen:str,teff:float,log_g:float,spdict:dict,is_lte:bool=True):
             print(f"Attempt {i+1}:   Model run has encountered an error.")
             model_broke = True
 
-    os.chdir(HOME)
+    # Rename output files
+    subprocess.run(['cp','fort.7','structure.dat'])
+    subprocess.run(['rm','-f','fort.7'])
+
     if model_broke:
-        log = open('log.dat','a')
-        log.write(scen+'\tmetals'+'\n')
-        log.close()
+        print("Model did not successfully converge. Check 'log.dat' and 'structure.dat' for details.")
+        run_finished = False
     else:
         print("LTE metals model completed!")
+        run_finished    = True
+
+    os.chdir(HOME)
+    return run_finished
 
 def synspec(scen:str,species_dict,imode:int=0,lammin:int=900,lammax:int=10000):
     """
@@ -216,10 +224,10 @@ def synspec(scen:str,species_dict,imode:int=0,lammin:int=900,lammax:int=10000):
 
     # fetch outputs from NLTE line run
     if 'metals' in os.listdir('..'):
-        subprocess.run(['cp','../metals/fort.7','fort.8'])
+        subprocess.run(['cp','../metals/structure.dat','fort.8'])
         subprocess.run(['cp','../metals/fort.5','fort.5'])
     else:
-        subprocess.run(['cp','../lte/fort.7','fort.8'])
+        subprocess.run(['cp','../lte/structure.dat','fort.8'])
         subprocess.run(['cp','../lte/fort.5','fort.5'])
         
     # run SYNSPEC
@@ -229,6 +237,11 @@ def synspec(scen:str,species_dict,imode:int=0,lammin:int=900,lammax:int=10000):
         print("\n Model run has encountered an error. Exiting...")
         sys.exit(0)
     print('SYNSPEC complete!')
+
+    # Rename spectrum file
+    subprocess.run(['cp','fort.7',scen+'_spectrum.dat'])
+    subprocess.run(['cp','fort.7','../'+scen+'_spectrum.dat'])
+    subprocess.run(['rm','-f','fort.7'])
 
     os.chdir(PATH)
 
@@ -251,7 +264,7 @@ def main():   # or main
 
     # SYNSPEC parameters
     do_synspec  = False
-    imode       = 2
+    imode       = 2         # means a pure-hydrogen run
     lammin      = 900
     lammax      = 25000
 
@@ -266,7 +279,7 @@ def main():   # or main
             # metal species changes
             if key in species_dict.keys():
                 # Implicit or explicit treatment
-                if val[-1]=='!':
+                if val[-1]!='!':
                     species_dict[key]['mode'] = 2
                 else:
                     species_dict[key]['mode'] = 1

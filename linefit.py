@@ -18,9 +18,9 @@ def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0,ddex=0.5):
     # Move to scenario folder
     os.chdir(f'tlusty/scenarios/{scen_name}/synspec/')
 
-    # Save original spectrum if not already done
-    if 'base.7' not in os.listdir():
-        subprocess.run(['cp','fort.7','base.7'])
+    # # Save original spectrum if not already done
+    # if 'base.7' not in os.listdir():
+    #     subprocess.run(['cp','fort.7','base.7'])
 
     ### Write input files
     # Write new fort.55 -- spectral range 
@@ -29,7 +29,7 @@ def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0,ddex=0.5):
             0       1       1       1       0
             1       1       0       0       0
             2       0       0
-        {linecenter-width-5}    {linecenter+width+5}      10       0  0.00001     0.01
+        {linecenter-width-5}    {linecenter+width+5}      10       0  1.e-8     0.01
             0       0"""
     f = open('fort.55','w')
     f.write(unit55)
@@ -183,9 +183,10 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
         exit()
 
     # Normalize
-    flux_obs = flux_obs[np.abs(wvln_obs-linecenter) <= width]
-    sigma_obs= sigma[np.abs(wvln_obs-linecenter) <= width]
-    wvln_obs = wvln_obs[np.abs(wvln_obs-linecenter) <= width]
+    this_range  = np.where(np.abs(wvln_obs-linecenter) <= width)
+    flux_obs    = flux_obs[this_range]
+    sigma_obs   = sigma[this_range]
+    wvln_obs    = wvln_obs[this_range]
 
     # Normalize the observed spectrum and uncertainties
     blue_ave = np.average(flux_obs[np.abs(wvln_obs-linecenter+width) < 0.5])
@@ -231,6 +232,7 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
         params = [abn]
         for p in other_params: params.append(p)
         wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
+        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
         score = chi2(flux_obs,flux_model,sigma_obs)
         probs[i] = np.exp(-0.5*score)
 
@@ -252,20 +254,21 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower,upper,conv_stuff=0.,
     params = [most_prob]
     for p in other_params: params.append(p)
     wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
+    flux_model = np.interp(wvln_obs,wvln_model,flux_model)
     score = chi2(flux_obs,flux_model,sigma_obs)
 
     # If applicable, add best-fitting ISM line
     if do_ism:
         ism_width,ism_amp = popt[2:]
-        line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_model-ism_center)**2/(ism_width)**2)
+        line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
         flux_model  *= line_mask
-        ax.plot(wvln_model,line_mask,c='red',linestyle='dashed',zorder=100)
+        ax.plot(wvln_obs,line_mask,c='red',linestyle='dashed',zorder=100)
 
-    ax[0].plot(wvln_model,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
+    ax[0].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
     ax[0].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
     ax[0].set_xlabel(r"Wavelength [$\AA$]",size='large')
     ax[0].set_ylabel("Normalized flux",size='large')
-    ax[0].set(xlim=(np.min(wvln_model),np.max(wvln_model)),
+    ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)),
               ylim=(0,1.5))
     ax[0].legend()
 
@@ -296,15 +299,31 @@ if __name__=='__main__':
     # Because this function needs a fair but of info to run, the user is prompted for each
     # parameter.
 
+    ### The name of the FITS file containing the observed spectrum
     fname_spec  = input("Please provide the path to the FITS spectrum to be fit:\t")
+    try:
+        fits.open(fname_spec)
+    except:
+        print("File not found. Exiting.")
+        exit()
 
+    ### The scenario that will be used to generate spectra
     scen        = input("Please provide the name of the scenario to use as a base:\t")
+    if scen not in os.listdir('tlusty/scenarios/'):
+        print("Scenario not found. Exiting.")
+        exit()
 
-    linecenter  = input("Please provide the central wavelength of the line/region to be fit:\t")
+    linecenter  = input("Please provide the central wavelength of the line/region to be fit (AA):\t")
     linecenter  = float(linecenter)
+    if (linecenter < 900) or (linecenter > 25000):
+        print("Wavelength is out of range. Exiting")
+        exit()
 
     width       = input("Please provide the width of the region to be fit, in Angstroms (default: 5AA):\t")
-    width       = float(width)
+    try:
+        width = float(width)
+    except ValueError:
+        width = 5.
 
     sp_str      = input("Please provide the symbol or number of the element whose abundance you are\nfitting for:\t")
     try:
