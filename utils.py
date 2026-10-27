@@ -216,13 +216,24 @@ def shrinkScenarios():
     Shrink scenario folder sizes by removing large files that are not used.
     """
     for scen in os.listdir(SCEN):
-        if scen[0]=='.': continue
-        if 'fort.81' in os.listdir(f'{SCEN}/{scen}/lte'):
-            os.remove(f'{SCEN}/{scen}/lte/fort.81')
-        if 'fort.82' in os.listdir(f'{SCEN}/{scen}/lte'):
-            os.remove(f'{SCEN}/{scen}/lte/fort.82')
-        if 'fort.83' in os.listdir(f'{SCEN}/{scen}/lte'):
-            os.remove(f'{SCEN}/{scen}/lte/fort.83')
+        if scen=='.DS_Store' or scen=='.gitignore': continue
+        try:
+            if 'fort.81' in os.listdir(f'{SCEN}/{scen}/lte'):
+                os.remove(f'{SCEN}/{scen}/lte/fort.81')
+            if 'fort.82' in os.listdir(f'{SCEN}/{scen}/lte'):
+                os.remove(f'{SCEN}/{scen}/lte/fort.82')
+            if 'fort.83' in os.listdir(f'{SCEN}/{scen}/lte'):
+                os.remove(f'{SCEN}/{scen}/lte/fort.83')
+            if 'fort.81' in os.listdir(f'{SCEN}/{scen}/metals'):
+                os.remove(f'{SCEN}/{scen}/metals/fort.81')
+            if 'fort.82' in os.listdir(f'{SCEN}/{scen}/metals'):
+                os.remove(f'{SCEN}/{scen}/metals/fort.82')
+            if 'fort.83' in os.listdir(f'{SCEN}/{scen}/metals'):
+                os.remove(f'{SCEN}/{scen}/metals/fort.83')
+        except NotADirectoryError:
+            continue
+        except FileNotFoundError:
+            continue
 
 ##########################################################################################
 

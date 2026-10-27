@@ -1,0 +1,6 @@
+data/fits_files/gd56_cos_fuv.fits   test
+6       -10.    -4.     1335    2.  1334.52
+14      -10.    -4.     1262    5.  0.
+
+data/fits_files/gd56_cos_nuv.fits   test
+16      -10.    -4.     1807    2.  0.
