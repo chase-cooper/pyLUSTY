@@ -9,7 +9,7 @@ from utils import *
 ### Produce a spectrum over a range [linecenter-width-2,linecenter+width+2] using the input files
 ###     of scenario 'scen_name' and varying the species [sp] to have abundances [abn]
 
-def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0,ddex=0.5):
+def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0.,ddex=0.1):
     """
     Produce a spectrum over a wavelength range of [linecenter-width-2,linecenter+width+2],
     where the abundance of element 'sp' is set to 'abn'.
@@ -85,7 +85,7 @@ def preload_spectra(scen_name,sp,lower,upper,ddex=0.1):
         spec_dict[abnstr]   = [np.float64(wvln),np.float64(flux)]
     return spec_dict
 
-def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.):
+def old_forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.):
     """
     Given a set of parameters and a set of spectra, produce a normalizedsynthetic spectrum. The 
     base spectrum is first built by interpolating between spectra with similar abundances, then 
@@ -160,7 +160,7 @@ def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.)
 
     return np.float64(wvln_norm),np.float64(flux_final)
 
-def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=0.,
+def old_lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=0.,
             p0=[],ism_center=0.,known_lines=[],
             showfig:bool=True,savefig:bool=False):
     """
@@ -170,26 +170,23 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
     ### Load spectral dictionary
     spec_dict = preload_spectra(scen,sp,lower,upper,ddex=0.1)
 
-    ### Load in and normalize observed spectrum
-    # Load in
+    ### Load in observed spectrum
     if conv_stuff!=0:
         wvln_obs,flux_obs,sigma = openCOSfile(fname_spec)
-    elif 'xsh' in fname_spec:
-        wvln_obs,flux_obs,sigma,gaussian = openXshooter(fname_spec)
-        conv_stuff = 5000/gaussian/2.355
-    elif 'uves' in fname_spec:
-        wvln_obs,flux_obs,sigma,gaussian = openUVES(fname_spec)
-        conv_stuff = 5000/gaussian/2.355
     else:
-        exit()
+        instrument = fits.getheader(fname_spec)['INSTRUME']
+        if instrument=='XSHOOTER':  wvln_obs,flux_obs,sigma,gaussian = openXshooter(fname_spec)
+        elif instrument=='UVES':    wvln_obs,flux_obs,sigma,gaussian = openUVES(fname_spec)
+        else:   
+            print("Observing instrument not currently supported. Exiting...")
+            exit()
+        conv_stuff = np.mean(wvln_obs)/gaussian/2.355
 
-    # Normalize
+    # Clip relevant part of the spectrum
     this_range  = np.where(np.abs(wvln_obs-linecenter) <= width)
     flux_obs    = flux_obs[this_range]
     sigma_obs   = sigma[this_range]
     wvln_obs    = wvln_obs[this_range]
-    # plt.plot(wvln_obs,flux_obs)
-    # plt.show()
 
     # Normalize the observed spectrum and uncertainties # !!!
     blue_ave = np.average(flux_obs[np.abs(wvln_obs-linecenter+width) < 0.2])
@@ -197,12 +194,6 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
     norm_obs = np.interp(wvln_obs,[wvln_obs[0],wvln_obs[-1]],[blue_ave,red_ave])
     sigma_obs/= flux_obs
     flux_obs /= norm_obs
-
-    # fig,ax = plt.subplots()
-    # ax.plot(wvln_obs,flux_obs)
-    # ax.vlines([linecenter-width,linecenter+width],ymin=0,ymax=1,
-    #           colors=['blue','red'])
-    # plt.show()
 
     ### Run least squares
 
@@ -235,30 +226,58 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
     result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
     popt    = result.x
 
-    ### Probability distribution function
+    ### Results
+    res = {
+        'type':         '',
+        'abundance':    0.,
+        '1sigma':       [],
+        '3sigma':       [],
+        'abn':          [],
+        'pdf':          [],
+        'cdf':          []
+    }
+
+    # Probability distribution function
     other_params    = popt[1:]
     abn_range       = np.arange(lower,upper,0.01)
-    probs           = np.zeros_like(abn_range)
+    scores          = np.zeros_like(abn_range)
     for i,abn in enumerate(abn_range):
         params = [abn]
         for p in other_params: params.append(p)
         wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
         flux_model = np.interp(wvln_obs,wvln_model,flux_model)
         score = chi2(flux_obs,flux_model,sigma_obs)
-        probs[i] = np.exp(-0.5*score)
+        scores[i] = score
 
+    # Scale factor to make sure highest probabilities aren't rounded to 0
+    scores_mod  = scores - np.min(scores)
+    
+    probs       = np.exp(-0.5*scores_mod)
     pdf_norm    = probs/sum(probs)
     cdf         = np.zeros_like(pdf_norm)
     for i in range(len(cdf)-1):
         cdf[i] = sum(pdf_norm[:i+1])/sum(pdf_norm)
     cdf[-1] = 1
+    res['abn']  = abn_range
+    res['pdf']  = pdf_norm
+    res['cdf']  = cdf
 
     # Limits from CDF
     most_prob                   = abn_range[np.argmax(pdf_norm)]
     lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
     lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
-    
-    # print(cdf)
+
+    # If most probable abundance is some amount more probable than the lowest
+    #   abundance considered, confidently return a detection. WIP
+    prob_ratio  = 1e3
+    if max(pdf_norm)/prob_ratio > pdf_norm[0]:
+        res['type']     = 'detection'
+        res['value']    = most_prob
+        res['1sigma']   = [lower_1sigma,upper_3sigma]
+        res['3sigma']   = [lower_3sigma,upper_3sigma]
+    else:
+        res['type']     = 'upper limit'
+        res['value']    = upper_3sigma
 
     ### Plot results
     if showfig or savefig:
@@ -297,17 +316,15 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
         ax[1].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
                     label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
                     +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
+        # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+        #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
         
-        # print(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=-10),lower)
-        # print(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-4),upper)
-        left    = max(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=-10),lower)
-        right   = min(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-4),upper)
         ax[1].set_xlim(
-            left  = min(left,right),
-            right = max(left,right)
+            max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
+            min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
         )
         ax[1].invert_xaxis()
-        ax[1].set_ylim(0,max(pdf_norm)*1.1)
+        ax[1].set_ylim(0,np.nanmax(pdf_norm)*1.1)
         ax[1].legend()
 
         fig.set_figwidth(11)
@@ -319,7 +336,281 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
             plt.show()
         plt.close()
 
-    return most_prob,lower_3sigma,upper_3sigma
+    return res
+
+def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.,norm_width=0.2):
+    """
+    Given a set of parameters and a set of spectra, produce a normalizedsynthetic spectrum. The 
+    base spectrum is first built by interpolating between spectra with similar abundances, then 
+    the spectrum is red/blueshifted according to a radial velocity parameter. The spectrum is
+    convolved, either with an instrumental LSF (COS) or with a Gaussian, then normalized, and if
+    applicable an ISM line is inserted.
+    """
+
+    ### Unpack parameters
+    if len(params)==3:
+        do_ism = False
+        abn,vrad,logscale = params
+    elif len(params)==5:
+        do_ism = True
+        abn,vrad,ism_width,ism_amp,logscale = params
+    else:
+        do_ism = False
+        print("Invalid number of parameters. Exiting.")
+        exit()
+    
+    ### Interpolate spectrum at the given abundance
+
+    # Get upper and lower bounding abundances (accurate to one decimal places)
+    ddex        = spec_dict['ddex']
+    abn_lo      = max(abn - (ddex/2) + 1e-4,-20.)
+    abn_hi      = min(abn + (ddex/2) + 1e-4,-4.)
+    abnstr_lo   = np.format_float_positional(abn_lo,precision=1,min_digits=1)+'0'
+    abnstr_hi   = np.format_float_positional(abn_hi,precision=1,min_digits=1)+'0'
+
+    # Read in spectra; interpolate to same wavelengths
+    wvln_lo,flux_lo = spec_dict[abnstr_lo]
+    wvln_hi,flux_hi = spec_dict[abnstr_hi]
+    flux_hi = np.interp(wvln_lo,wvln_hi,flux_hi)
+
+    # Linearly interpolate
+    wvln_base = np.copy(wvln_lo)
+    flux_base = (abn - float(abnstr_lo))/ddex * flux_hi + (float(abnstr_hi) - abn)/ddex * flux_lo
+
+    ### Apply scale factor
+    flux_base *= 10**logscale
+
+    ### Apply wavelength shift
+    beta        = vrad / 3e5
+    wvln_shift  = wvln_base * np.sqrt( (1 + beta) / (1 - beta) )
+
+    ### Convolve with COS LSF or a Gaussian
+    if type(conv_stuff)==tuple:
+        # You are convolving this spectrum with the COS instrument LSF.
+        wvln_conv,flux_conv = convolveModelWithCOS(wvln_shift,flux_base,files=conv_stuff)
+    else:
+        wvln_conv,flux_conv = convolveModelWithGaussian(wvln_shift,flux_base,width=conv_stuff)
+    
+    ### Restrict to wavelengths in the region of interest
+    norm_range  = np.where(np.abs(wvln_conv-linecenter) <= width)
+    wvln_norm   = wvln_conv[norm_range]
+    flux_norm   = flux_conv[norm_range]
+
+    ### Apply ISM line
+    if do_ism:
+        ism_factor  = 1 - ism_amp*np.exp(-0.5*(wvln_norm-ism_center)**2/ism_width**2)
+        flux_final   = flux_norm * ism_factor
+    else:
+        flux_final = flux_norm
+
+    return np.float64(wvln_norm),np.float64(flux_final)
+
+def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=0.,
+            p0=[],ism_center=0.,known_lines=[],norm_width:float=0.2,
+            showfig:bool=True,savefig:bool=False):
+    """
+    
+    """
+
+    ### Load spectral dictionary
+    spec_dict = preload_spectra(scen,sp,lower,upper,ddex=0.1)
+
+    ### Load in and normalize observed spectrum
+
+    # Load in
+    inst = fits.getheader(fname_spec)['INSTRUME']
+    if conv_stuff!=0:
+        wvln_obs,flux_obs,sigma_obs = openCOSfile(fname_spec)
+    # elif 'xsh' in fname_spec:
+    elif inst=='XSHOOTER':
+        wvln_obs,flux_obs,sigma_obs,gaussian = openXshooter(fname_spec)
+        conv_stuff = 5000/gaussian/2.355
+    # elif 'uves' in fname_spec:
+    elif inst=='UVES':
+        wvln_obs,flux_obs,sigma_obs,gaussian = openUVES(fname_spec)
+        conv_stuff = 5000/gaussian/2.355
+    else:
+        print("Unexpected data format. Exiting...")
+        exit()
+    
+    # Trim
+    wrange      = np.where(np.abs(wvln_obs-linecenter) <= width)
+    wvln_obs    = wvln_obs[wrange]
+    flux_obs    = flux_obs[wrange]
+    sigma_obs   = sigma_obs[wrange]
+
+    ### Run least squares
+
+    # Define parameter bounds and initial guess
+    if ism_center != 0.:
+        bounds = [
+            (lower+1e-2,-150,0.01,0.01,-30),
+            (upper-1e-2,150,0.1,1,0)
+        ]
+        if p0==[]:
+            p0 = [-7.,40,0.03,0.3,-15]
+    else:
+        bounds = [
+            (lower+1e-2,-150,-30),
+            (upper-1e-2,150,0)
+        ]
+        if p0==[]:
+            p0 = [-7.,40,-15]
+
+    # Define residuals function
+    def residuals(params):
+        print(params)
+        # Load in and normalize synthetic spectrum
+        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center,norm_width)
+        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+
+        # Scale up residuals
+        return (flux_model - flux_obs)*1e30
+
+    # Run it
+    result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
+    popt    = result.x
+
+    ### Probability distribution function
+    other_params    = popt[1:]
+    abn_range       = np.arange(lower,upper,0.01)
+    scores          = np.zeros_like(abn_range)
+
+    # Vary abundance
+    for i,abn in enumerate(abn_range):
+        params = [abn]
+        for p in other_params: params.append(p)
+        # input(params)
+        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+
+        score = chi2(flux_obs,flux_model,sigma_obs)
+        scores[i] = score
+
+    scores      -= min(scores)
+    probs       = np.exp(-0.5*scores)
+    pdf_norm    = probs/sum(probs)
+    cdf         = np.zeros_like(pdf_norm)
+    for i in range(len(cdf)-1):
+        cdf[i] = sum(pdf_norm[:i+1])/sum(pdf_norm)
+    cdf[-1] = 1
+
+    # Limits from CDF
+    most_prob                   = abn_range[np.argmax(pdf_norm)]
+    lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
+    lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
+    best_vrad   = other_params[0]
+
+    ### Plot results
+    if showfig or savefig:
+        fig,ax = plt.subplots(ncols=2)
+
+        ### Best-fit model
+        params = [most_prob]
+        for p in other_params: params.append(p)
+        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+        score = chi2(flux_obs,flux_model,sigma_obs)
+
+        # If applicable, add best-fitting ISM line (WIP)
+        # if ism_center != 0.:
+            # ism_width,ism_amp = popt[2:4]
+            # line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
+            # flux_ism    = line_mask*flux_model
+            # ax[0].plot(wvln_obs,flux_ism,c='red',linestyle='dashed',zorder=100)
+
+        ax[0].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
+        ax[0].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
+        ax[0].set_xlabel(r"Wavelength [$\AA$]",size='large')
+        ax[0].set_ylabel("Flux",size='large')
+        ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)))
+        ax[0].legend()
+
+        ax[1].plot(abn_range,pdf_norm,c='black')
+        ax[1].set_xlabel("Abundance",size='large')
+        ax[1].set_ylabel("Relative probability",size='large')
+        ax[1].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
+                    label="Best fit: "+np.format_float_positional(most_prob,precision=2))
+        ax[1].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+                    label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=2)
+                    +', '+np.format_float_positional(lower_1sigma-most_prob,precision=2))
+        ax[1].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
+                    label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
+                    +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
+        # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+        #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
+        
+        ax[1].set_xlim(
+            max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
+            min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
+        )
+        ax[1].invert_xaxis()
+        ax[1].set_ylim(0,np.nanmax(pdf_norm)*1.1)
+        ax[1].legend()
+
+        fig.set_figwidth(11)
+        plt.tight_layout()
+        if savefig:
+            plt.savefig(f'outputs/linefit_{scen}_elem{sp}_lc{linecenter}_w{width}.png',dpi=200)
+        # plt.legend()
+        if showfig:
+            plt.show()
+        plt.close()
+
+    return most_prob,lower_1sigma,upper_1sigma,lower_3sigma,upper_3sigma,best_vrad
+
+
+def testLineFit():
+
+    # FUV observed spectrum to fit
+    fname_spec = "data/fits_files/gd56_cos_fuv.fits"
+    conv_stuff = loadConvolutionFiles(fname_spec)
+    # fname_spec = "data/fits_files/Gaia3296_xsh_nuv.fits"
+    # conv_stuff = 0.
+
+    # Scenario folder. If not present, run it
+    if 'test_gd56' not in os.listdir(SCEN):
+        subprocess.run(['python3','tlusty.py','test_gd56','15000','8','chondrite=-10','synspec=1'])
+    scen = 'test_gd56'
+
+    # Line parameters   -- Si II lines at 1260 and 1265 AA
+    # linecenter  = 1262
+    # width       = 10
+    # sp          = 14    
+    # ism         = 0.
+    # lower       = -10.
+    # upper       = -4.
+
+    # Line parameters   -- C II lines at 1335 AA
+    linecenter  = 1335
+    width       = 8
+    sp          = 6    
+    ism         = 1334.53
+    lower       = -10.
+    upper       = -4.
+
+    # linecenter  = 3935
+    # width       = 8
+    # sp          = 20
+    # ism         = 0.
+    # lower       = -10.
+    # upper       = -5.
+
+    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
+
+    res = lineFit(fname_spec=fname_spec,
+                  scen=scen,
+                  linecenter=linecenter,
+                  width=width,
+                  sp=sp,
+                  lower=lower,
+                  upper=upper,
+                  conv_stuff=conv_stuff,
+                  ism_center=ism,
+                  showfig=True)
+
+testLineFit()
+input()
 
 if __name__=='__main__':
     # Because this function needs a fair but of info to run, the user is prompted for each
@@ -330,15 +621,20 @@ if __name__=='__main__':
     ### Option to automate line fitting
     line_file = input("If you have a list of lines to fit, please type the path to the list. Otherwise,\npress enter:\t")
     if line_file != '':
-        f = open('test.dat','r')
+
+        # Read line fit file
+        f = open(line_file,'r')
         lines = f.readlines()
         f.close()
 
         for line in lines:
+
             line = line.split()
 
             if len(line) <= 1:
                 continue
+
+            if line[0][0] == '#': continue
 
             # Read spectrum name, scenario name
             if len(line) == 2:
@@ -365,6 +661,9 @@ if __name__=='__main__':
                     exit()
 
             else:
+                # Open results file
+                out = open(f"outputs/linefit_{scen}.log",'a')
+
                 sp_str,lower,upper,linecenter,width,ism_center = line[:6]
                 if len(line) > 6:
                     pass
@@ -401,19 +700,25 @@ if __name__=='__main__':
                 newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
                 spectra = preload_spectra(scen,sp,lower,upper,0.1)
 
-                lineFit(
-                    fname_spec=fname_spec,
-                    linecenter=linecenter,
-                    width=width,
-                    scen=scen,
-                    sp=sp,
-                    lower=lower,
-                    upper=upper,
-                    conv_stuff=conv_stuff,
-                    ism_center=ism_center,
-                    known_lines=[],
-                    savefig=True
+                res = lineFit(
+                            fname_spec=fname_spec,
+                            linecenter=linecenter,
+                            width=width,
+                            scen=scen,
+                            sp=sp,
+                            lower=lower,
+                            upper=upper,
+                            conv_stuff=conv_stuff,
+                            ism_center=ism_center,
+                            p0=[-7,40],
+                            known_lines=[],
+                            showfig=False,
+                            savefig=True
                 )
+
+                out.write('\t'.join([str(sp),str(linecenter),str(width),res['type'],str(res['value'])])+'\n')
+                out.close()
+
 
     ################################################################################
 
