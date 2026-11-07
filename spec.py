@@ -316,7 +316,7 @@ if __name__ == '__main__':
     else:
         exit()
 
-    width = 5000/res
+    width = 5000/res/2.355
 
     # #######
     spec_dict = loadSpectra()

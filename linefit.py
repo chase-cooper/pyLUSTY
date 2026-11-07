@@ -29,7 +29,7 @@ def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0.,ddex=0.1):
             0       1       1       1       0
             1       1       0       0       0
             2       0       0
-        {linecenter-width-5}    {linecenter+width+5}      10       0  1.e-8     0.01
+        {linecenter-width-5}    {linecenter+width+5}      10       0  1.e-10     0.01
             0       0"""
     f = open('fort.55','w')
     f.write(unit55)
@@ -459,7 +459,7 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
 
     # Define residuals function
     def residuals(params):
-        print(params)
+        # print(params)
         # Load in and normalize synthetic spectrum
         wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center,norm_width)
         flux_model = np.interp(wvln_obs,wvln_model,flux_model)
@@ -473,7 +473,8 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
 
     ### Probability distribution function
     other_params    = popt[1:]
-    abn_range       = np.arange(lower,upper,0.01)
+    abn_range       = np.arange(lower,upper,0.01)[::-1]
+    abn_range       = abn_range[np.where(np.abs(abn_range-popt[0]) <= 1)]
     scores          = np.zeros_like(abn_range)
 
     # Vary abundance
@@ -482,6 +483,10 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
         for p in other_params: params.append(p)
         # input(params)
         wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+        if np.any(np.isnan(flux_model)):
+            scores[i] = scores[i-1]
+            continue
+        
         flux_model = np.interp(wvln_obs,wvln_model,flux_model)
 
         score = chi2(flux_obs,flux_model,sigma_obs)
@@ -544,7 +549,7 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
             max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
             min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
         )
-        ax[1].invert_xaxis()
+        # ax[1].invert_xaxis()
         ax[1].set_ylim(0,np.nanmax(pdf_norm)*1.1)
         ax[1].legend()
 
@@ -558,7 +563,6 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
         plt.close()
 
     return most_prob,lower_1sigma,upper_1sigma,lower_3sigma,upper_3sigma,best_vrad
-
 
 def testLineFit():
 
@@ -574,27 +578,12 @@ def testLineFit():
     scen = 'test_gd56'
 
     # Line parameters   -- Si II lines at 1260 and 1265 AA
-    # linecenter  = 1262
-    # width       = 10
-    # sp          = 14    
-    # ism         = 0.
-    # lower       = -10.
-    # upper       = -4.
-
-    # Line parameters   -- C II lines at 1335 AA
-    linecenter  = 1335
-    width       = 8
-    sp          = 6    
-    ism         = 1334.53
+    linecenter  = 1262
+    width       = 10
+    sp          = 14    
+    ism         = 0.
     lower       = -10.
     upper       = -4.
-
-    # linecenter  = 3935
-    # width       = 8
-    # sp          = 20
-    # ism         = 0.
-    # lower       = -10.
-    # upper       = -5.
 
     # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
 
@@ -607,7 +596,52 @@ def testLineFit():
                   upper=upper,
                   conv_stuff=conv_stuff,
                   ism_center=ism,
-                  showfig=True)
+                  savefig=True)
+
+    print("Finshed fit of the Si II lines in GD56")
+
+    # Line parameters   -- C II lines at 1335 AA
+    linecenter  = 1335
+    width       = 5
+    sp          = 6    
+    ism         = 1334.53
+    lower       = -10.
+    upper       = -4.
+
+    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
+
+    res = lineFit(fname_spec=fname_spec,
+                  scen=scen,
+                  linecenter=linecenter,
+                  width=width,
+                  sp=sp,
+                  lower=lower,
+                  upper=upper,
+                  conv_stuff=conv_stuff,
+                  ism_center=ism,
+                  savefig=True)
+
+    print("Finshed fit of the C II lines in GD56")
+
+    # linecenter  = 3935
+    # width       = 8
+    # sp          = 20
+    # ism         = 0.
+    # lower       = -10.
+    # upper       = -5.
+
+    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
+
+    # res = lineFit(fname_spec=fname_spec,
+    #               scen=scen,
+    #               linecenter=linecenter,
+    #               width=width,
+    #               sp=sp,
+    #               lower=lower,
+    #               upper=upper,
+    #               conv_stuff=conv_stuff,
+    #               ism_center=ism,
+    #               savefig=True)
 
 testLineFit()
 input()
