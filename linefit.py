@@ -29,7 +29,7 @@ def newModelSpectra(scen_name,linecenter,width,sp,abn,upper=0.,ddex=0.1):
             0       1       1       1       0
             1       1       0       0       0
             2       0       0
-        {linecenter-width-5}    {linecenter+width+5}      10       0  1.e-10     0.01
+        {linecenter-width-5}    {linecenter+width+5}      10       0  1.e-12     0.01
             0       0"""
     f = open('fort.55','w')
     f.write(unit55)
@@ -85,260 +85,7 @@ def preload_spectra(scen_name,sp,lower,upper,ddex=0.1):
         spec_dict[abnstr]   = [np.float64(wvln),np.float64(flux)]
     return spec_dict
 
-def old_forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.):
-    """
-    Given a set of parameters and a set of spectra, produce a normalizedsynthetic spectrum. The 
-    base spectrum is first built by interpolating between spectra with similar abundances, then 
-    the spectrum is red/blueshifted according to a radial velocity parameter. The spectrum is
-    convolved, either with an instrumental LSF (COS) or with a Gaussian, then normalized, and if
-    applicable an ISM line is inserted.
-    """
-
-    ### Unpack parameters
-    if len(params)==2:
-        do_ism = False
-        abn,vrad = params
-    elif len(params)==4:
-        do_ism = True
-        abn,vrad,ism_width,ism_amp = params
-    else:
-        do_ism = False
-        exit()
-    
-    ### Interpolate spectrum at the given abundance
-
-    # Get upper and lower bounding abundances (accurate to one decimal places)
-    ddex        = spec_dict['ddex']
-    abn_lo      = max(abn - (ddex/2) + 1e-4,-10.)
-    abn_hi      = min(abn + (ddex/2) + 1e-4,-4.)
-    abnstr_lo   = np.format_float_positional(abn_lo,precision=1,min_digits=1)+'0'
-    abnstr_hi   = np.format_float_positional(abn_hi,precision=1,min_digits=1)+'0'
-
-    # Read in spectra; interpolate to same wavelengths
-    wvln_lo,flux_lo = spec_dict[abnstr_lo]
-    wvln_hi,flux_hi = spec_dict[abnstr_hi]
-    flux_hi = np.interp(wvln_lo,wvln_hi,flux_hi)
-
-    # Linearly interpolate
-    wvln_base = np.copy(wvln_lo)
-    flux_base = (abn - float(abnstr_lo))/ddex * flux_hi + (float(abnstr_hi) - abn)/ddex * flux_lo
-
-    ### Apply wavelength shift
-    beta        = vrad / 3e5
-    wvln_shift  = wvln_base * np.sqrt( (1 + beta) / (1 - beta) )
-
-    ### Convolve with COS LSF or a Gaussian
-    if type(conv_stuff)==tuple:
-        # You are convolving this spectrum with the COS instrument LSF.
-        wvln_conv,flux_conv = convolveModelWithCOS(wvln_shift,flux_base,files=conv_stuff)
-    else:
-        wvln_conv,flux_conv = convolveModelWithGaussian(wvln_shift,flux_base,width=conv_stuff)
-    
-
-    ### Normalize
-    # Normalize the spectrum
-    blue_ave_wvln   = linecenter-width
-    red_ave_wvln    = linecenter+width
-    blue_ave_range  = np.where(np.abs(wvln_conv-blue_ave_wvln) <= 0.5)
-    red_ave_range   = np.where(np.abs(wvln_conv-red_ave_wvln) <= 0.5)
-    blue_ave        = np.average(flux_conv[blue_ave_range])
-    red_ave         = np.average(flux_conv[red_ave_range])
-    norm            = np.interp(wvln_conv,[blue_ave_wvln,red_ave_wvln],[blue_ave,red_ave])
-    flux_norm       = flux_conv / norm
-
-    # Restrict to wavelengths in the region of interest
-    norm_range  = np.where(np.abs(wvln_conv-linecenter) <= width)
-    wvln_norm   = wvln_conv[norm_range]
-    flux_norm   = flux_norm[norm_range]
-
-    ### Apply ISM line
-    if do_ism:
-        ism_factor  = 1 - ism_amp*np.exp(-0.5*(wvln_norm-ism_center)**2/ism_width**2)
-        flux_final   = flux_norm * ism_factor
-    else:
-        flux_final = flux_norm
-
-    return np.float64(wvln_norm),np.float64(flux_final)
-
-def old_lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=0.,
-            p0=[],ism_center=0.,known_lines=[],
-            showfig:bool=True,savefig:bool=False):
-    """
-    
-    """
-
-    ### Load spectral dictionary
-    spec_dict = preload_spectra(scen,sp,lower,upper,ddex=0.1)
-
-    ### Load in observed spectrum
-    if conv_stuff!=0:
-        wvln_obs,flux_obs,sigma = openCOSfile(fname_spec)
-    else:
-        instrument = fits.getheader(fname_spec)['INSTRUME']
-        if instrument=='XSHOOTER':  wvln_obs,flux_obs,sigma,gaussian = openXshooter(fname_spec)
-        elif instrument=='UVES':    wvln_obs,flux_obs,sigma,gaussian = openUVES(fname_spec)
-        else:   
-            print("Observing instrument not currently supported. Exiting...")
-            exit()
-        conv_stuff = np.mean(wvln_obs)/gaussian/2.355
-
-    # Clip relevant part of the spectrum
-    this_range  = np.where(np.abs(wvln_obs-linecenter) <= width)
-    flux_obs    = flux_obs[this_range]
-    sigma_obs   = sigma[this_range]
-    wvln_obs    = wvln_obs[this_range]
-
-    # Normalize the observed spectrum and uncertainties # !!!
-    blue_ave = np.average(flux_obs[np.abs(wvln_obs-linecenter+width) < 0.2])
-    red_ave  = np.average(flux_obs[np.abs(wvln_obs-linecenter-width) < 0.2])
-    norm_obs = np.interp(wvln_obs,[wvln_obs[0],wvln_obs[-1]],[blue_ave,red_ave])
-    sigma_obs/= flux_obs
-    flux_obs /= norm_obs
-
-    ### Run least squares
-
-    # Define parameter bounds and initial guess
-    if ism_center != 0.:
-        bounds = [
-            (lower,-150,0.01,0.01),
-            (upper,150,0.1,1)
-        ]
-        if p0==[]:
-            p0 = [-7.,40,0.03,0.3]
-    else:
-        bounds = [
-            (lower,-150),
-            (upper,150)
-        ]
-        if p0==[]:
-            p0 = [-7.,40]
-
-    # Define residuals function
-    def residuals(params):
-        # Load in and normalize synthetic spectrum
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
-
-        # calculate residuals
-        return flux_model - flux_obs
-
-    # Run it
-    result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
-    popt    = result.x
-
-    ### Results
-    res = {
-        'type':         '',
-        'abundance':    0.,
-        '1sigma':       [],
-        '3sigma':       [],
-        'abn':          [],
-        'pdf':          [],
-        'cdf':          []
-    }
-
-    # Probability distribution function
-    other_params    = popt[1:]
-    abn_range       = np.arange(lower,upper,0.01)
-    scores          = np.zeros_like(abn_range)
-    for i,abn in enumerate(abn_range):
-        params = [abn]
-        for p in other_params: params.append(p)
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
-        score = chi2(flux_obs,flux_model,sigma_obs)
-        scores[i] = score
-
-    # Scale factor to make sure highest probabilities aren't rounded to 0
-    scores_mod  = scores - np.min(scores)
-    
-    probs       = np.exp(-0.5*scores_mod)
-    pdf_norm    = probs/sum(probs)
-    cdf         = np.zeros_like(pdf_norm)
-    for i in range(len(cdf)-1):
-        cdf[i] = sum(pdf_norm[:i+1])/sum(pdf_norm)
-    cdf[-1] = 1
-    res['abn']  = abn_range
-    res['pdf']  = pdf_norm
-    res['cdf']  = cdf
-
-    # Limits from CDF
-    most_prob                   = abn_range[np.argmax(pdf_norm)]
-    lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
-    lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
-
-    # If most probable abundance is some amount more probable than the lowest
-    #   abundance considered, confidently return a detection. WIP
-    prob_ratio  = 1e3
-    if max(pdf_norm)/prob_ratio > pdf_norm[0]:
-        res['type']     = 'detection'
-        res['value']    = most_prob
-        res['1sigma']   = [lower_1sigma,upper_3sigma]
-        res['3sigma']   = [lower_3sigma,upper_3sigma]
-    else:
-        res['type']     = 'upper limit'
-        res['value']    = upper_3sigma
-
-    ### Plot results
-    if showfig or savefig:
-        fig,ax = plt.subplots(ncols=2)
-
-        ### Best-fit model
-        params = [most_prob]
-        for p in other_params: params.append(p)
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff)
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
-        score = chi2(flux_obs,flux_model,sigma_obs)
-
-        # If applicable, add best-fitting ISM line
-        if ism_center != 0.:
-            ism_width,ism_amp = popt[2:]
-            line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
-            flux_model  *= line_mask
-            ax[0].plot(wvln_obs,line_mask,c='red',linestyle='dashed',zorder=100)
-
-        ax[0].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
-        ax[0].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
-        ax[0].set_xlabel(r"Wavelength [$\AA$]",size='large')
-        ax[0].set_ylabel("Normalized flux",size='large')
-        ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)),
-                ylim=(0,1.5))
-        ax[0].legend()
-
-        ax[1].plot(abn_range,pdf_norm,c='black')
-        ax[1].set_xlabel("Abundance",size='large')
-        ax[1].set_ylabel("Relative probability",size='large')
-        ax[1].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
-                    label="Best fit: "+np.format_float_positional(most_prob,precision=2))
-        ax[1].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-                    label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=2)
-                    +', '+np.format_float_positional(lower_1sigma-most_prob,precision=2))
-        ax[1].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
-                    label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
-                    +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
-        # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-        #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
-        
-        ax[1].set_xlim(
-            max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
-            min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
-        )
-        ax[1].invert_xaxis()
-        ax[1].set_ylim(0,np.nanmax(pdf_norm)*1.1)
-        ax[1].legend()
-
-        fig.set_figwidth(11)
-        plt.tight_layout()
-        if savefig:
-            plt.savefig(f'outputs/linefit_{scen}_elem{sp}_{linecenter}AA.png',dpi=250)
-        # plt.legend()
-        if showfig:
-            plt.show()
-        plt.close()
-
-    return res
-
-def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.,norm_width=0.2):
+def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.):
     """
     Given a set of parameters and a set of spectra, produce a normalizedsynthetic spectrum. The 
     base spectrum is first built by interpolating between spectra with similar abundances, then 
@@ -403,14 +150,23 @@ def forward_model(params,linecenter,width,spec_dict,conv_stuff=1.,ism_center=0.,
     else:
         flux_final = flux_norm
 
+    ### Determine scale factor by equalizing median fluxes
+    # med_obs = np.median(flux_obs)
+    # med_mod = np.median(flux_final)
+    # flux_final *= med_obs/med_mod
+
     return np.float64(wvln_norm),np.float64(flux_final)
 
-def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=0.,
-            p0=[],ism_center=0.,known_lines=[],norm_width:float=0.2,
+def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=0.,
+            p0=[],ism_center=0.,known_lines=[],
+            nfits:int=3,dwidth:float=4.,uplim_ratio:float=1000.,
             showfig:bool=True,savefig:bool=False):
     """
     
     """
+
+    ### Generate spectra
+    newModelSpectra(scen,linecenter,width+(dwidth*(nfits-1)),sp,lower,upper,0.1)
 
     ### Load spectral dictionary
     spec_dict = preload_spectra(scen,sp,lower,upper,ddex=0.1)
@@ -418,151 +174,192 @@ def lineFit(fname_spec,scen,linecenter,width,sp,lower=-10.,upper=-4.,conv_stuff=
     ### Load in and normalize observed spectrum
 
     # Load in
-    inst = fits.getheader(fname_spec)['INSTRUME']
-    if conv_stuff!=0:
-        wvln_obs,flux_obs,sigma_obs = openCOSfile(fname_spec)
-    # elif 'xsh' in fname_spec:
-    elif inst=='XSHOOTER':
-        wvln_obs,flux_obs,sigma_obs,gaussian = openXshooter(fname_spec)
-        conv_stuff = 5000/gaussian/2.355
-    # elif 'uves' in fname_spec:
-    elif inst=='UVES':
-        wvln_obs,flux_obs,sigma_obs,gaussian = openUVES(fname_spec)
-        conv_stuff = 5000/gaussian/2.355
-    else:
-        print("Unexpected data format. Exiting...")
-        exit()
-    
-    # Trim
-    wrange      = np.where(np.abs(wvln_obs-linecenter) <= width)
-    wvln_obs    = wvln_obs[wrange]
-    flux_obs    = flux_obs[wrange]
-    sigma_obs   = sigma_obs[wrange]
+    try:
+        inst = fits.getheader(fname_spec)['INSTRUME']
+        if conv_stuff!=0:
+            wvln_obs_base,flux_obs_base,sigma_obs_base = openCOSfile(fname_spec)
+        # elif 'xsh' in fname_spec:
+        elif inst=='XSHOOTER':
+            wvln_obs_base,flux_obs_base,sigma_obs_base ,gaussian = openXshooter(fname_spec)
+            conv_stuff = 5000/gaussian/2.355
+        # elif 'uves' in fname_spec:
+        elif inst=='UVES':
+            wvln_obs_base,flux_obs_base,sigma_obs_base ,gaussian = openUVES(fname_spec)
+            conv_stuff = 5000/gaussian/2.355
+        else:
+            print("Unexpected data format. Exiting...")
+            exit()
+    except:
+        dat = np.genfromtxt(fname_spec,delimiter=',')
+        wvln_obs_base   = dat[:,0]*10
+        flux_obs_base   = dat[:,1]
+        sigma_obs_base  = dat[:,2]
+        conv_stuff      = 1/2.355
 
-    ### Run least squares
+    ### Do N fits at different wavelengths
+    fit_abundances  = []
+    uncertainties   = []
+    vrad_values     = []
+    sigmas          = []
+    scales          = []
+    fit_type        = "Detection"
 
-    # Define parameter bounds and initial guess
+    # Define parameter bounds and initial guess for least squares
+    mean_abn    = np.mean([lower,upper])
     if ism_center != 0.:
         bounds = [
             (lower+1e-2,-150,0.01,0.01,-30),
             (upper-1e-2,150,0.1,1,0)
         ]
         if p0==[]:
-            p0 = [-7.,40,0.03,0.3,-15]
+            p0 = [mean_abn,40,0.03,0.3,-15]
     else:
         bounds = [
             (lower+1e-2,-150,-30),
             (upper-1e-2,150,0)
         ]
         if p0==[]:
-            p0 = [-7.,40,-15]
+            p0 = [mean_abn,40,-15]
 
-    # Define residuals function
-    def residuals(params):
-        # print(params)
-        # Load in and normalize synthetic spectrum
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center,norm_width)
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+    fig,ax = plt.subplots(ncols=nfits,nrows=2)
 
-        # Scale up residuals
-        return (flux_model - flux_obs)*1e30
+    for i in range(nfits):
+    
+        # Trim
+        wrange      = np.where(np.abs(wvln_obs_base-linecenter) <= width)
+        wvln_obs    = wvln_obs_base[wrange]
+        flux_obs    = flux_obs_base[wrange]
+        sigma_obs   = sigma_obs_base[wrange]
 
-    # Run it
-    result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
-    popt    = result.x
+        ### Run least squares
 
-    ### Probability distribution function
-    other_params    = popt[1:]
-    abn_range       = np.arange(lower,upper,0.01)[::-1]
-    abn_range       = abn_range[np.where(np.abs(abn_range-popt[0]) <= 1)]
-    scores          = np.zeros_like(abn_range)
+        # Define residuals function
+        def residuals(params):
+            # Load in and normalize synthetic spectrum
+            wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+            flux_model = np.interp(wvln_obs,wvln_model,flux_model)
 
-    # Vary abundance
-    for i,abn in enumerate(abn_range):
-        params = [abn]
-        for p in other_params: params.append(p)
-        # input(params)
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
-        if np.any(np.isnan(flux_model)):
-            scores[i] = scores[i-1]
-            continue
-        
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+            # Scale up residuals
+            return (flux_model - flux_obs)*1e30
 
-        score = chi2(flux_obs,flux_model,sigma_obs)
-        scores[i] = score
+        # Run it
+        result  = least_squares(residuals,p0,method='trf',xtol=1e-10,bounds=bounds)
+        popt    = result.x
+        # print(popt)
 
-    scores      -= min(scores)
-    probs       = np.exp(-0.5*scores)
-    pdf_norm    = probs/sum(probs)
-    cdf         = np.zeros_like(pdf_norm)
-    for i in range(len(cdf)-1):
-        cdf[i] = sum(pdf_norm[:i+1])/sum(pdf_norm)
-    cdf[-1] = 1
+        ### Probability distribution function
+        other_params    = popt[1:]
+        abn_range       = np.arange(lower,upper,0.01)
+        scores          = np.zeros_like(abn_range)
 
-    # Limits from CDF
-    most_prob                   = abn_range[np.argmax(pdf_norm)]
-    lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
-    lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
-    best_vrad   = other_params[0]
+        # Vary abundance
+        for j,abn in enumerate(abn_range):
+            params = [abn]
+            for p in other_params: params.append(p)
+            # input(params)
+            wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+            flux_model = np.interp(wvln_obs,wvln_model,flux_model)
 
-    ### Plot results
-    if showfig or savefig:
-        fig,ax = plt.subplots(ncols=2)
+            score = chi2(flux_obs,flux_model,sigma_obs)
+            scores[j] = score
 
-        ### Best-fit model
-        params = [most_prob]
-        for p in other_params: params.append(p)
-        wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
-        flux_model = np.interp(wvln_obs,wvln_model,flux_model)
-        score = chi2(flux_obs,flux_model,sigma_obs)
+        scores      -= min(scores)
+        probs       = np.exp(-0.5*scores)
+        pdf_norm    = probs/sum(probs)
+        cdf         = np.zeros_like(pdf_norm)
+        for k in range(len(cdf)-1):
+            cdf[k] = sum(pdf_norm[:k+1])/sum(pdf_norm)
+        cdf[-1] = 1
 
-        # If applicable, add best-fitting ISM line (WIP)
-        # if ism_center != 0.:
-            # ism_width,ism_amp = popt[2:4]
-            # line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
-            # flux_ism    = line_mask*flux_model
-            # ax[0].plot(wvln_obs,flux_ism,c='red',linestyle='dashed',zorder=100)
+        # Limits from CDF
+        most_prob                   = abn_range[np.argmax(pdf_norm)]
+        lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
+        lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
+        best_vrad   = other_params[0]
+        best_scale  = other_params[-1]
 
-        ax[0].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
-        ax[0].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
-        ax[0].set_xlabel(r"Wavelength [$\AA$]",size='large')
-        ax[0].set_ylabel("Flux",size='large')
-        ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)))
-        ax[0].legend()
+        # Save results
+        fit_abundances.append(most_prob)
 
-        ax[1].plot(abn_range,pdf_norm,c='black')
-        ax[1].set_xlabel("Abundance",size='large')
-        ax[1].set_ylabel("Relative probability",size='large')
-        ax[1].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
-                    label="Best fit: "+np.format_float_positional(most_prob,precision=2))
-        ax[1].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-                    label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=2)
-                    +', '+np.format_float_positional(lower_1sigma-most_prob,precision=2))
-        ax[1].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
-                    label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
-                    +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
-        # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-        #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
-        
-        ax[1].set_xlim(
-            max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
-            min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
-        )
-        # ax[1].invert_xaxis()
-        ax[1].set_ylim(0,np.nanmax(pdf_norm)*1.1)
-        ax[1].legend()
+        unc = np.mean(np.abs([lower_1sigma,upper_1sigma]-most_prob))
+        uncertainties.append(unc)
 
-        fig.set_figwidth(11)
-        plt.tight_layout()
-        if savefig:
-            plt.savefig(f'outputs/linefit_{scen}_elem{sp}_lc{linecenter}_w{width}.png',dpi=200)
-        # plt.legend()
-        if showfig:
-            plt.show()
-        plt.close()
+        sigmas.append([lower_1sigma,upper_1sigma,lower_3sigma,upper_3sigma])
+        scales.append(best_scale)
+        vrad_values.append(best_vrad)
 
-    return most_prob,lower_1sigma,upper_1sigma,lower_3sigma,upper_3sigma,best_vrad
+        if np.max(pdf_norm)/pdf_norm[0] < uplim_ratio:
+            fit_type = "Upper limit"
+
+        ### Plot results
+        if showfig or savefig:
+
+            ### Best-fit model
+            params = [most_prob]
+            for p in other_params: params.append(p)
+            wvln_model,flux_model = forward_model(params,linecenter,width,spec_dict,conv_stuff,ism_center)
+            flux_model = np.interp(wvln_obs,wvln_model,flux_model)
+            score = chi2(flux_obs,flux_model,sigma_obs)
+
+            # If applicable, add best-fitting ISM line (WIP)
+            # if ism_center != 0.:
+                # ism_width,ism_amp = popt[2:4]
+                # line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
+                # flux_ism    = line_mask*flux_model
+                # ax[0].plot(wvln_obs,flux_ism,c='red',linestyle='dashed',zorder=100)
+
+            ax[0,i].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
+            ax[0,i].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
+            ax[0,i].set_xlabel(r"Wavelength [$\AA$]",size='large')
+            ax[0,i].set_ylabel("Flux",size='large')
+            # ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)))
+            # ax[0,i].legend()
+
+            ax[1,i].plot(abn_range,pdf_norm,c='black')
+            ax[1,i].set_xlabel("Abundance",size='large')
+            ax[1,i].set_ylabel("Relative probability",size='large')
+            ax[1,i].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
+                        label="Best fit: "+np.format_float_positional(most_prob,precision=2))
+            ax[1,i].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+                        label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=2)
+                        +', '+np.format_float_positional(lower_1sigma-most_prob,precision=2))
+            ax[1,i].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
+                        label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
+                        +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
+            # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
+            #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
+            
+            ax[1,i].set_xlim(
+                max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
+                min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
+            )
+            ax[1,i].invert_xaxis()
+            ax[1,i].set_ylim(0,np.nanmax(pdf_norm)*1.1)
+            # ax[1,i].legend()
+
+        width += dwidth
+
+    fig.set_figwidth(11)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(f'outputs/linefit_{scen}_elem{sp}_lc{linecenter}_w{width}.png',dpi=200)
+    # plt.legend()
+    if showfig:
+        plt.show()
+    plt.close()
+
+    # Averaged results
+    ave_abn     = np.mean(fit_abundances)
+    ave_sig_abn = np.mean(uncertainties)
+    sig_width   = np.std(fit_abundances)
+    sig         = np.sqrt(sig_width**2 + ave_sig_abn**2)
+
+    print(ave_abn)
+    print(ave_sig_abn)
+    print(sig_width)
+    print(sig)
+
+    return ave_abn,sig,ave_sig_abn,sig_width
 
 def testLineFit():
 
@@ -577,71 +374,49 @@ def testLineFit():
         subprocess.run(['python3','tlusty.py','test_gd56','15000','8','chondrite=-10','synspec=1'])
     scen = 'test_gd56'
 
-    # Line parameters   -- Si II lines at 1260 and 1265 AA
+    # # Line parameters   -- Si II lines at 1260 and 1265 AA
     linecenter  = 1262
-    width       = 10
+    width       = 7
     sp          = 14    
     ism         = 0.
     lower       = -10.
     upper       = -4.
 
-    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
-
-    res = lineFit(fname_spec=fname_spec,
-                  scen=scen,
-                  linecenter=linecenter,
-                  width=width,
-                  sp=sp,
-                  lower=lower,
-                  upper=upper,
-                  conv_stuff=conv_stuff,
-                  ism_center=ism,
-                  savefig=True)
-
-    print("Finshed fit of the Si II lines in GD56")
-
     # Line parameters   -- C II lines at 1335 AA
-    linecenter  = 1335
-    width       = 5
-    sp          = 6    
-    ism         = 1334.53
-    lower       = -10.
-    upper       = -4.
-
-    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
-
-    res = lineFit(fname_spec=fname_spec,
-                  scen=scen,
-                  linecenter=linecenter,
-                  width=width,
-                  sp=sp,
-                  lower=lower,
-                  upper=upper,
-                  conv_stuff=conv_stuff,
-                  ism_center=ism,
-                  savefig=True)
-
-    print("Finshed fit of the C II lines in GD56")
-
-    # linecenter  = 3935
+    # linecenter  = 1335
     # width       = 8
+    # sp          = 6    
+    # ism         = 1334.53
+    # lower       = -10.
+    # upper       = -4.
+
+    # Line parameters   -- Ca II line, 3933 AA
+    # linecenter  = 3935
+    # width       = 5
     # sp          = 20
     # ism         = 0.
     # lower       = -10.
     # upper       = -5.
 
-    # newModelSpectra(scen,linecenter,width,sp,lower,upper,0.1)
+    # Line parameters   -- Mg II lines, 4481 AA
+    # linecenter  = 4481
+    # width       = 5
+    # sp          = 12
+    # ism         = 0.
+    # lower       = -7
+    # upper       = -4
 
-    # res = lineFit(fname_spec=fname_spec,
-    #               scen=scen,
-    #               linecenter=linecenter,
-    #               width=width,
-    #               sp=sp,
-    #               lower=lower,
-    #               upper=upper,
-    #               conv_stuff=conv_stuff,
-    #               ism_center=ism,
-    #               savefig=True)
+    res = lineFit(fname_spec=fname_spec,
+                  scen=scen,
+                  linecenter=linecenter,
+                  width=width,
+                  sp=sp,
+                  lower=lower,
+                  upper=upper,
+                  conv_stuff=conv_stuff,
+                  ism_center=ism,
+                  showfig=True,
+                  nfits=5,dwidth=2)
 
 testLineFit()
 input()
