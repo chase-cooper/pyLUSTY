@@ -1,3 +1,4 @@
+from astropy.coordinates import SkyCoord
 import matplotlib.pyplot as plt
 import numpy as np
 import requests,sys
@@ -682,7 +683,7 @@ def log_likelihood(theta,x,y,y_err,spec_dict):
     # Forward model
     wvln,flux       = interp_spectrum_dict(teff,logg,spec_dict)
     phot_model_emi  = model_flux_to_phot(wvln,flux)
-    phot_model_obs  = phot_model_emi*rm*rm/d/d
+    phot_model_obs  = 4*np.pi*phot_model_emi*rm*rm/d/d
 
     # Chi2
     score       = chi2(y,phot_model_obs,y_err)
@@ -704,8 +705,8 @@ def log_prior(theta,plx0,plx0_err):           # contains constants dependent on 
     # distance prior from gaia data
 
     # log prior -- containts hard-coded constants set by model grid
-    if (teff < 10000)   or (teff > 25000)\
-    or (logg < 6.0)    or (logg > 9.0)\
+    if (teff < 10000)   or (teff > 90000)\
+    or (logg < 7.0)    or (logg > 9.0)\
     or (r < 0.2)        or (r > 3):
         return -np.inf
 

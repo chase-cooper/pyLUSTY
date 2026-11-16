@@ -221,7 +221,10 @@ def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=
         if p0==[]:
             p0 = [mean_abn,40,-15]
 
-    fig,ax = plt.subplots(ncols=nfits,nrows=2)
+    fig,ax = plt.subplots(ncols=nfits+1,nrows=2)
+
+    abn_range       = np.arange(lower,upper,0.01)
+    cumulative_pdf  = np.ones_like(abn_range)
 
     for i in range(nfits):
     
@@ -249,7 +252,6 @@ def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=
 
         ### Probability distribution function
         other_params    = popt[1:]
-        abn_range       = np.arange(lower,upper,0.01)
         scores          = np.zeros_like(abn_range)
 
         # Vary abundance
@@ -271,10 +273,12 @@ def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=
             cdf[k] = sum(pdf_norm[:k+1])/sum(pdf_norm)
         cdf[-1] = 1
 
+        cumulative_pdf *= pdf_norm
+
         # Limits from CDF
         most_prob                   = abn_range[np.argmax(pdf_norm)]
-        lower_1sigma,upper_1sigma   = np.interp([0.341,0.659],cdf,abn_range)
-        lower_3sigma,upper_3sigma   = np.interp([0.01,0.99],cdf,abn_range)
+        lower_1sigma,upper_1sigma   = np.interp([0.159,0.841],cdf,abn_range)
+        lower_3sigma,upper_3sigma   = np.interp([0.003,0.997],cdf,abn_range)
         best_vrad   = other_params[0]
         best_scale  = other_params[-1]
 
@@ -288,9 +292,6 @@ def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=
         scales.append(best_scale)
         vrad_values.append(best_vrad)
 
-        if np.max(pdf_norm)/pdf_norm[0] < uplim_ratio:
-            fit_type = "Upper limit"
-
         ### Plot results
         if showfig or savefig:
 
@@ -301,65 +302,100 @@ def lineFit(fname_spec,scen,sp,linecenter,width,lower=-10.,upper=-4.,conv_stuff=
             flux_model = np.interp(wvln_obs,wvln_model,flux_model)
             score = chi2(flux_obs,flux_model,sigma_obs)
 
-            # If applicable, add best-fitting ISM line (WIP)
-            # if ism_center != 0.:
-                # ism_width,ism_amp = popt[2:4]
-                # line_mask   = 1 - ism_amp*np.exp(-0.5*(wvln_obs-ism_center)**2/(ism_width)**2)
-                # flux_ism    = line_mask*flux_model
-                # ax[0].plot(wvln_obs,flux_ism,c='red',linestyle='dashed',zorder=100)
-
             ax[0,i].plot(wvln_obs,flux_model,c='red',zorder=100,label=r"Best fit, $\chi^2=$"+str(np.around(score,2)))
             ax[0,i].plot(wvln_obs,flux_obs,c='black',label="Observed Spectrum")
             ax[0,i].set_xlabel(r"Wavelength [$\AA$]",size='large')
-            ax[0,i].set_ylabel("Flux",size='large')
-            # ax[0].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)))
-            # ax[0,i].legend()
+            ax[0,i].set(xlim=(np.min(wvln_obs),np.max(wvln_obs)))
+            ax[0,i].legend()
 
             ax[1,i].plot(abn_range,pdf_norm,c='black')
-            ax[1,i].set_xlabel("Abundance",size='large')
-            ax[1,i].set_ylabel("Relative probability",size='large')
             ax[1,i].vlines(most_prob,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='solid',zorder=-100,
-                        label="Best fit: "+np.format_float_positional(most_prob,precision=2))
-            ax[1,i].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-                        label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=2)
-                        +', '+np.format_float_positional(lower_1sigma-most_prob,precision=2))
-            ax[1,i].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dotted',zorder=-100,
-                        label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=2)
-                        +', '+np.format_float_positional(lower_3sigma-most_prob,precision=2))
-            # ax[1].vlines(upper_3sigma,ymin=0,ymax=max(pdf_norm)*1.1,colors='grey',linestyle='dashed',zorder=-100,
-            #             label=r"$3\sigma$ upper limit: "+np.format_float_positional(upper_3sigma,precision=2))
-            
+                        label="[X/H]="+np.format_float_positional(most_prob,precision=2))
+            ax[1,i].vlines([lower_1sigma,upper_1sigma],ymin=0,ymax=max(pdf_norm)*1.6,colors='grey',linestyle='dashed',zorder=-100,
+                        label=r"$1\sigma$ limits: +"+np.format_float_positional(upper_1sigma-most_prob,precision=3)
+                        +', '+np.format_float_positional(lower_1sigma-most_prob,precision=3))
+            ax[1,i].vlines([lower_3sigma,upper_3sigma],ymin=0,ymax=max(pdf_norm)*1.6,colors='grey',linestyle='dotted',zorder=-100,
+                        label=r"$3\sigma$ limits: +"+np.format_float_positional(upper_3sigma-most_prob,precision=3)
+                        +', '+np.format_float_positional(lower_3sigma-most_prob,precision=3))
+            ax[1,i].set_xlabel("Abundance",size='large')
             ax[1,i].set_xlim(
-                max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*2.5,nan=-10),lower),
-                min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*2.5,nan=0),upper)
+                max(np.nan_to_num(most_prob + (upper_3sigma - most_prob)*1.5,nan=-10),lower),
+                min(np.nan_to_num(most_prob + (lower_3sigma - most_prob)*1.5,nan=0),upper)
             )
             ax[1,i].invert_xaxis()
-            ax[1,i].set_ylim(0,np.nanmax(pdf_norm)*1.1)
-            # ax[1,i].legend()
+            ax[1,i].set_ylim(0,np.nanmax(pdf_norm)*1.6)
+            ax[1,i].legend()
+
+            ax[0,i].set_title(r"$\pm$ "+str(width)+r"$\AA$",size='large')
 
         width += dwidth
 
-    fig.set_figwidth(11)
+    # Clear empty axis
+    ax[0,nfits].axis('off')
+
+    # Cumulative probability distribution function (results)
+    cumulative_pdf      /= np.sum(cumulative_pdf)
+    best_abn            = abn_range[np.argmax(cumulative_pdf)]
+    cumulative_cdf      = np.zeros_like(cumulative_pdf)
+    for k in range(len(cumulative_cdf)-1):
+        cumulative_cdf[k] = sum(cumulative_pdf[:k+1])/sum(cumulative_pdf)
+    cumulative_cdf[-1]  = 1
+    cum_lo1sig,cum_hi1sig = np.interp([0.159,0.841],cumulative_cdf,abn_range)
+    cum_lo3sig,cum_hi3sig = np.interp([0.003,0.997],cumulative_cdf,abn_range)
+    ax[1,nfits].plot(abn_range,cumulative_pdf,c='black')
+
+    lo1sig_str  = np.format_float_positional(cum_lo1sig-best_abn,3,min_digits=3)
+    hi1sig_str  = np.format_float_positional(cum_hi1sig-best_abn,3,min_digits=3)
+    lo3sig_str  = np.format_float_positional(cum_lo3sig-best_abn,3,min_digits=3)
+    hi3sig_str  = np.format_float_positional(cum_hi3sig-best_abn,3,min_digits=3)
+    ax[1,nfits].vlines(best_abn,ymin=0,ymax=1.6*np.max(cumulative_pdf),
+                       colors='grey',linestyle='solid',zorder=-100,
+                       label=r"[X/H]="+np.format_float_positional(best_abn,2,min_digits=2))
+    ax[1,nfits].vlines([cum_lo1sig,cum_hi1sig],ymin=0,ymax=1.6*np.max(cumulative_pdf),
+                       colors='grey',linestyles='dashed',zorder=-100,
+                       label=r"1$\sigma$ ({},{})".format(lo1sig_str,'+'+hi1sig_str))
+    ax[1,nfits].vlines([cum_lo3sig,cum_hi3sig],ymin=0,ymax=1.6*np.max(cumulative_pdf),
+                        colors='grey',linestyles='dotted',zorder=-100,
+                        label=r"3$\sigma$ ({},{})".format(lo3sig_str,'+'+hi3sig_str))
+
+    ax[1,nfits].set_xlabel("Abundance",size='large')
+    ax[1,nfits].set_title("Joint PDF",size='large')
+    ax[1,nfits].set_xlim(
+        max(best_abn+1.5*(cum_lo3sig-best_abn),lower),
+        min(best_abn+1.5*(cum_hi3sig-best_abn),upper)
+    )
+    ax[1,nfits].set_ylim(0,1.6*np.max(cumulative_pdf))
+    ax[1,nfits].legend()
+
+    ax[0,0].set_ylabel("Flux",size='large')
+    ax[1,0].set_ylabel("Relative probability",size='large')
+    fig.set_figwidth(5*nfits)
+    fig.set_figheight(6)
     plt.tight_layout()
     if savefig:
-        plt.savefig(f'outputs/linefit_{scen}_elem{sp}_lc{linecenter}_w{width}.png',dpi=200)
+        plt.savefig(f'outputs/linefit_{scen}_elem{sp}_lc{linecenter}.png',dpi=200)
     # plt.legend()
     if showfig:
         plt.show()
     plt.close()
 
-    # Averaged results
-    ave_abn     = np.mean(fit_abundances)
-    ave_sig_abn = np.mean(uncertainties)
-    sig_width   = np.std(fit_abundances)
-    sig         = np.sqrt(sig_width**2 + ave_sig_abn**2)
+    # Averaged results - cumulative PDF
+    best_abn    = best_abn
+    sigma       = [cum_lo1sig-best_abn,cum_hi1sig-best_abn]
+    print("Results -- Cumulative PDF")
+    print("sigma:   "+str(sigma))
 
-    print(ave_abn)
-    print(ave_sig_abn)
-    print(sig_width)
-    print(sig)
+    # Results - uncertainty in quadrature
+    sigma_abn   = np.average(uncertainties)
+    sigma_noise = np.std(fit_abundances)
+    total_sigma = np.sqrt(sigma_abn**2 + sigma_noise**2)
+    print("Results -- quadrature")
+    print("Sigma (abn):     "+str(sigma_abn))
+    print("Sigma (noise):   "+str(sigma_noise))
+    print("Total sigma:     "+str(total_sigma))
 
-    return ave_abn,sig,ave_sig_abn,sig_width
+
+    return best_abn,sigma
 
 def testLineFit():
 
@@ -379,8 +415,8 @@ def testLineFit():
     width       = 7
     sp          = 14    
     ism         = 0.
-    lower       = -10.
-    upper       = -4.
+    lower       = -6.
+    upper       = -5.
 
     # Line parameters   -- C II lines at 1335 AA
     # linecenter  = 1335
@@ -415,7 +451,7 @@ def testLineFit():
                   upper=upper,
                   conv_stuff=conv_stuff,
                   ism_center=ism,
-                  showfig=True,
+                  savefig=True,
                   nfits=5,dwidth=2)
 
 testLineFit()

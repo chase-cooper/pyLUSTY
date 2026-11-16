@@ -810,21 +810,57 @@ def loadSpectra(shrink_factor:int=1):
     print("Loading spectra...",end='')
 
     spec_dict = {}
-    for t in np.arange(10000,25001,500):
+
+    # Spectra for cool-warm objects: 10,000K - 24,000K
+    for t in np.arange(10000,24001,500):
         tstr = str(t)
-        for g in np.arange(6,9.1,0.5):
+        for g in np.arange(7,9.1,0.5):
             gstr = np.format_float_positional(g,precision=2,min_digits=2)
 
             scen = f"t{tstr}_g{gstr}"
             spec_dict[scen] = {}
 
-            dat = np.genfromtxt(f'data/hydrogengrid/{scen}.spec')
+            dat = np.genfromtxt(f'data/model_spectra/hydrogengrid/{scen}.spec')
             fwvln = dat[:,0][::shrink_factor]
             fflux = dat[:,1][::shrink_factor]
             spec_dict[scen] = {
                 'wvln':fwvln,
                 'flux':fflux
             }
+
+    # Spectra for hot objects: 24,000K - 90,000K (Bohlin et al. 2020)
+    for t in np.arange(26000,40001,2000):
+        tstr = str(t)
+        for g in np.arange(7,9.1,0.5):
+            gstr = np.format_float_positional(g,precision=2,min_digits=2)
+
+            scen = f"t{tstr}_g{gstr}"
+            spec_dict[scen] = {}
+
+            dat = np.genfromtxt(f'data/model_spectra/bohlin/{scen}.spec')
+            fwvln = dat[:,0][:]
+            fflux = dat[:,1][:]
+            spec_dict[scen] = {
+                'wvln':fwvln,
+                'flux':fflux
+            }
+
+    for t in np.arange(40000,90001,5000):
+        tstr = str(t)
+        for g in np.arange(7,9.1,0.5):
+            gstr = np.format_float_positional(g,precision=2,min_digits=2)
+
+            scen = f"t{tstr}_g{gstr}"
+            spec_dict[scen] = {}
+
+            dat = np.genfromtxt(f'data/model_spectra/bohlin/{scen}.spec')
+            fwvln = dat[:,0][:]
+            fflux = dat[:,1][:]
+            spec_dict[scen] = {
+                'wvln':fwvln,
+                'flux':fflux
+            }
+            
 
     end = time.time()
     print(f"Loaded spectra in {round(end-start,2)}s")
@@ -836,9 +872,17 @@ def interp_spectrum_dict(t,logg,spec_dict,plotit:bool=False):
     adjacent spectra to produce a new spectrum. Instead of reading in data from files, the data
     are accessed through a dictionary where all the data has been preloaded.
     """
-    t_lo        = t - (t % 500)
+
+    if t < 24000:
+        dt  = 500
+    elif t < 40000:
+        dt  = 2000
+    else:
+        dt  = 5000
+
+    t_lo        = t - (t % dt)
     t_lo_str    = str(int(t_lo))
-    t_hi        = t_lo + 500
+    t_hi        = t_lo + dt
     t_hi_str    = str(int(t_hi))
     diff_t      = t - t_lo
     # print(t_lo_str,t_hi_str,diff_t)
@@ -862,7 +906,7 @@ def interp_spectrum_dict(t,logg,spec_dict,plotit:bool=False):
     spec0x  = spec00['flux']*(1-diff_logg/0.5) + np.interp(wvln,spec01['wvln'],spec01['flux']) * diff_logg/0.5
     spec1x  = np.interp(wvln,spec10['wvln'],spec10['flux'])*(1-diff_logg/0.5) + np.interp(wvln,spec11['wvln'],spec11['flux'])*diff_logg/0.5
 
-    spec    = spec0x*(1-diff_t/500) + spec1x*(diff_t/500)
+    spec    = spec0x*(1-diff_t/dt) + spec1x*(diff_t/dt)
 
     if plotit:
         fig,ax = plt.subplots(ncols=3)

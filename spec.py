@@ -13,35 +13,6 @@ from utils import *
 
 ##########################################################################################
 
-def bilinear_interp(teff,logg,spec_dict):
-
-    # From values, get adjacent grid points
-    t_lo        = teff - (teff % 500)
-    t_lo_str    = str(int(t_lo))
-    t_hi        = t_lo + 500
-    t_hi_str    = str(int(t_hi))
-    diff_t      = teff - t_lo
-
-    logg_lo     = logg - (logg % 0.5)
-    logg_lo_str = np.format_float_positional(logg_lo,precision=2,min_digits=2)
-    logg_hi     = logg_lo + 0.5
-    logg_hi_str = np.format_float_positional(logg_hi,precision=2,min_digits=2)
-    diff_logg   = logg - logg_lo
-
-    # Retrieve spectra
-    spec00      = spec_dict[f"t{t_lo_str}_g{logg_lo_str}"]
-    spec01      = spec_dict[f"t{t_lo_str}_g{logg_hi_str}"]
-    spec10      = spec_dict[f"t{t_hi_str}_g{logg_lo_str}"]
-    spec11      = spec_dict[f"t{t_hi_str}_g{logg_hi_str}"]
-    wvln        = spec00['wvln']
-
-    # Interpolate
-    spec0x      = spec00['flux']*(1-diff_logg/0.5) + np.interp(wvln,spec01['wvln'],spec01['flux'])*diff_logg/0.5
-    spec1x      = spec10['flux']*(1-diff_logg/0.5) + np.interp(wvln,spec11['wvln'],spec11['flux'])*diff_logg/0.5
-    spec_final  = spec0x*(1-diff_t/500) + spec1x*diff_t/500
-
-    return wvln,spec_final
-    
 def normalizeBalmerLines(wvln,flux,sigma=[],fit_halpha:bool=False):
 
     lines = []
@@ -268,7 +239,7 @@ if __name__ == '__main__':
     fname = ''
     prior = ''
     t_prior_lo = 10000
-    t_prior_hi = 25000
+    t_prior_hi = 90000
 
     ndim        = 3
     nwalkers    = 100
